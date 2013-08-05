@@ -12,7 +12,9 @@ if(file_exists($core_path.'config.core.php')) {
 	/** @var modX $modx */
 	if($modx instanceof modX) {
 
-
+        /**
+         * Generate a hierarchical "tree view" from a array of MODX resources
+         */
 		class MyTreeView {
 
 			/** @var modX  */
@@ -21,15 +23,34 @@ if(file_exists($core_path.'config.core.php')) {
 			/** @var array */
 			protected $currentSelection = array();
 
+			/** @var modResource[] Array of MODX resources for the tree */
+			private $resources = array();
+
+            /** @var string $indentor The string repeated before a child resource to indicate indentation/level relationship */
+            private $indentor = '- ';
+
+            /** @var bool Whether or not to log timings during the tree build - for development only */
+            private $debug_timings = FALSE;
+
 			private $tstart = 0;
 
 			private $timings = array();
 
+            /**
+             * @param modX $modx Local reference to MODX instance
+             */
 			public function __construct(&$modx) {
 				$this->modx = $modx;
 			}
 
-			function buildTree(array $elements, $parentId = 0) {
+			/**
+			 * Recursively sort the array of resources into a nested array based on each elements parent.
+			 *
+			 * @param modResource[] $elements An array of MODX resources
+			 * @param int $parentId
+			 * @return array
+			 */
+			private function build_tree(array $elements, $parentId = 0) {
 				$branch = array();
 
 				foreach ($elements as $element) {
@@ -41,7 +62,7 @@ if(file_exists($core_path.'config.core.php')) {
 					}
 
 					if ($elementArr['parent'] == $parentId) {
-						$children = $this->buildTree($elements, $elementArr['id']);
+						$children = $this->build_tree($elements, $elementArr['id']);
 						if ($children) {
 							$elementArr['children'] = $children;
 						}
@@ -53,16 +74,22 @@ if(file_exists($core_path.'config.core.php')) {
 			}
 
 
-
-			function generate_array(array $arr, &$output = array(), $index = 0)
-			{
+            /**
+             * Flatten the nested array using text to indicate indentation/levels
+             *
+             * @param array $arr The source nested array of resources
+             * @param array $output The flattened array we build as we process the nested array
+             * @param int $index
+             * @return array
+             */
+			private function generate_array(array $arr, &$output = array(), $index = 0) {
 				foreach($arr as $item)
 				{
 					$selected = in_array($item['id'],$this->currentSelection);
 
 					$output[$item['id']] = array(
 						'value' => $item['id'],
-						'text' => str_repeat('- ', $index) . $item['pagetitle'],
+						'text' => str_repeat($this->indentor, $index) . $item['pagetitle'],
 						'selected' => $selected
 					);
 					if(isset($item['children']))
@@ -80,50 +107,50 @@ if(file_exists($core_path.'config.core.php')) {
 				$this->currentSelection = $selection;
 			}
 
+            /**
+             * @param string Which point we are recording
+             */
+            private function debugTimings($msg) {
+                if($this->debug_timings) {
+                    $this->timings[$msg] = microtime(TRUE) - $this->tstart;
+                }
+            }
 
             /**
-             * Get a list of resources and build a hierarchical tree list of them
-             *
-             * @param array $params Options for the list, including any currently selected value
+             * Start the debug if necessary
              */
-			public function process(array $params = array()) {
+            private function startDebug() {
+              if($this->debug_timings) {
+                   $this->tstart = microtime(TRUE);
+              }
+            }
 
-				$this->tstart = microtime(TRUE);
-
-				//$parents = $this->getInputOptions();
-				$parents = array(0);
-				if(isset($params['parents'])) {
-					if(is_array($params['parents'])) {
-						$parents = $params['parents'];
-					}
-					else {
-						$parents = array((int)$params['parents']);
-					}
-				}
-				else {
-					$parents = array(0);
-				}
-
-				$params['depth'] = !empty($params['depth']) ? $params['depth'] : 10;
-
+			/**
+			 * Generate the array of MODX resources
+			 *
+			 * @todo Allow searching by providing a query in $params['where'] (in json)
+			 * @param array $parents
+			 * @param $params
+			 */
+			private function load_resources(array $parents, $params) {
 				/* get all children */
 				$ids = array();
 
-					foreach ($parents as $parent) {
+				foreach ($parents as $parent) {
 
-						$ids[] = $parent;
-						$children = $this->modx->getChildIds($parent,$params['depth'],array(
-						                                                                              'context' => 'web',
-						                                                                         ));
-						$ids = array_merge($ids,$children);
-					}
-					$ids = array_unique($ids);
+					$ids[] = $parent;
+					$children = $this->modx->getChildIds($parent,$params['depth'],array(
+					                                                                   'context' => 'web',
+					                                                              ));
+					$ids = array_merge($ids,$children);
+				}
+				$ids = array_unique($ids);
 
+				$this->debugTimings('Got children of initial parents');
 
-				$this->timings['Got children of initial parents'] = microtime(TRUE) - $this->tstart;
+				// Build the query to load the actual resource list, giving an array of parents to start from
 
-                // Build the query to load the actual resource list, giving an array of parents to start from
-                    
+				/** @var xPDOQuery $c */
 				$c = $this->modx->newQuery('modResource');
 				$c->leftJoin('modResource','Parent');
 				if (!empty($ids)) {
@@ -150,15 +177,43 @@ if(file_exists($core_path.'config.core.php')) {
 
 				$c->orCondition(array('id'=>1));
 
-				$resources = $this->modx->getCollection('modResource',$c);
+				$this->resources = $this->modx->getCollection('modResource',$c);
+			}
+
+            /**
+             * Get a list of resources and build a hierarchical tree list of them
+             *
+             * @param array $params Options for the list, including any currently selected value
+             * @return array
+             */
+			public function Process(array $params = array()) {
+
+				$this->startDebug();
+
+				$parents = array(0);
+				if(isset($params['parents'])) {
+					if(is_array($params['parents'])) {
+						$parents = $params['parents'];
+					}
+					else {
+						$parents = array((int)$params['parents']);
+					}
+				}
+				else {
+					$parents = array(0);
+				}
+
+				$params['depth'] = !empty($params['depth']) ? $params['depth'] : 10;
+
+				$this->load_resources($parents,$params);
 
 
-				$this->timings['Got matching collection'] = microtime(TRUE) - $this->tstart;
+                $this->debugTimings('Got matching collection');
 
 				//Now build a tree hierarchy from the resources
-				$resources = $this->buildTree($resources);
+				$resources = $this->build_tree($this->resources);
 
-				$this->timings['Built tree'] = microtime(TRUE) - $this->tstart;
+                $this->debugTimings('Built tree');
 
 				/*
 				  See if we have a selected value
@@ -169,14 +224,30 @@ if(file_exists($core_path.'config.core.php')) {
 
 				/* iterate */
 				$opts = array();
-				$opts[] = array('value' => '','text' => '-','selected' => count($this->currentSelection)>0);				
+				$opts[] = array('value' => '','text' => '-','selected' => count($this->currentSelection)>0);
 
 				$opts = $this->generate_array($resources);
 
-				$this->timings['Generated array'] = microtime(TRUE) - $this->tstart;
+                $this->debugTimings('Generated array');
 
                 return $opts;
 
+			}
+
+			/**
+			 * Output the array of pages as a JS array to use in the ExtJS drop down values
+			 *
+			 * @param array $Pages
+			 * @return string
+			 */
+			public function FormatArray(array $Pages) {
+				$selectPairs = array();
+
+				foreach($Pages as $pageid => $data) {
+					$selectPairs[] = '["'.$data['text'].'",'.(int)$data['value'].']'."\r\n";
+				}
+
+				return implode(",\r\n",$selectPairs);
 			}
 		}
 
@@ -188,23 +259,17 @@ if(file_exists($core_path.'config.core.php')) {
 
 		);
 
-		$pagesList = $Viewer->process($params);
-		$selectPairs = array();
-		$selectItems = '';
+		$pagesList = $Viewer->Process($params);
 
-		foreach($pagesList as $pageid => $data) {
-			$selectPairs[] = '["'.$data['text'].'",'.(int)$data['value'].']'."\r\n";
-		}
-
-		$selectItems = implode(",\r\n",$selectPairs);
-
+		$selectItems = $this->FormatArray($pagesList);
 
 	}
 }
 
+/**
+ * Now output the JS for the dialog, embedding the page list
+ */
 ob_start();
-
 echo "var Global_selectItems = [".$selectItems."];";
-
 include("modxlink.js");
 ob_end_flush();
