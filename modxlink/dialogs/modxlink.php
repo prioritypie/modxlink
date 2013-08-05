@@ -81,6 +81,11 @@ if(file_exists($core_path.'config.core.php')) {
 			}
 
 
+            /**
+             * Get a list of resources and build a hierarchical tree list of them
+             *
+             * @param array $params Options for the list, including any currently selected value
+             */
 			public function process(array $params = array()) {
 
 				$this->tstart = microtime(TRUE);
@@ -117,6 +122,8 @@ if(file_exists($core_path.'config.core.php')) {
 
 				$this->timings['Got children of initial parents'] = microtime(TRUE) - $this->tstart;
 
+                // Build the query to load the actual resource list, giving an array of parents to start from
+                    
 				$c = $this->modx->newQuery('modResource');
 				$c->leftJoin('modResource','Parent');
 				if (!empty($ids)) {
@@ -154,7 +161,7 @@ if(file_exists($core_path.'config.core.php')) {
 				$this->timings['Built tree'] = microtime(TRUE) - $this->tstart;
 
 				/*
-				  Get any existing TV value (which may be a delimited string, with ||)
+				  See if we have a selected value
 				 */
 				if(isset($params['selected']) && !empty($params['selected'])) {
 					$this->setCurrentSelection(array($params['selected']));
@@ -162,33 +169,14 @@ if(file_exists($core_path.'config.core.php')) {
 
 				/* iterate */
 				$opts = array();
-				//if (!empty($params['showNone'])) {
-					$opts[] = array('value' => '','text' => '-','selected' => count($this->currentSelection)>0);
-				//}
+				$opts[] = array('value' => '','text' => '-','selected' => count($this->currentSelection)>0);				
 
 				$opts = $this->generate_array($resources);
 
 				$this->timings['Generated array'] = microtime(TRUE) - $this->tstart;
 
-				//print_r($this->timings);
+                return $opts;
 
-				/** @var modResource $resource */
-				/*foreach ($resources as $resource) {
-
-					$selected = in_array($resource['id'],$currentSelection);
-					//== $this->tv->get('value');
-					$prefix = $resource->get['parent'] > 0 ? $indent : '';
-
-					$opts[] = array(
-						'value' => $resource['id'],
-						'text' => $prefix.$resource['pagetitle'].' ('.$resource['id'].')',
-						'selected' => $selected,
-					);
-				}*/
-				//$this->setPlaceholder('opts',$opts);
-				//if($params['return']) {
-					return $opts;
-				//}
 			}
 		}
 
